@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"bufio"
 	"os"
+	"net"
 	"os/exec"
 	"strings"
 	"strconv"
+	"encoding/json"
 )
 
 type Message struct{
-	id int
-	text string
+	UserId int
+	ConversationId int
+	Text string
 }
 
 type Size struct{
@@ -19,17 +22,22 @@ type Size struct{
 	width int
 }
 
-const CL_UP1 = "\033[0A"
-const CL_DN1 = "\033[0B"
+const (
+	SERVER_CONN_TYPE = "tcp"
+	SERVER_ADDRESS = "localhost:3333"
 
-const CL_CLEAR = "\033[2J"
-const CL_ORIGIN = "\033[0;0f"
-const CL_ERASE_LINE = "\033[K"
+	CL_UP1 = "\033[0A"
+	CL_DN1 = "\033[0B"
 
-const CL_WHITE = "\033[0;37m"
-const CL_BLUE = "\033[1;34m"
-const CL_RED = "\033[0;31m"
-const CL_LIGHT_RED = "\033[1;31m"
+	CL_CLEAR = "\033[2J"
+	CL_ORIGIN = "\033[0;0f"
+	CL_ERASE_LINE = "\033[K"
+
+	CL_WHITE = "\033[0;37m"
+	CL_BLUE = "\033[1;34m"
+	CL_RED = "\033[0;31m"
+	CL_LIGHT_RED = "\033[1;31m"
+)
 
 func getTerminalSize() Size{
 	cmd := exec.Command("stty", "size")
@@ -75,10 +83,11 @@ func clWorker(c chan Message){
 		select {
 			case message := <- c:
 				fmt.Println()
-				printText(screenSize, message.text, CL_BLUE)
+				printText(screenSize, message.Text, CL_BLUE)
 			case text := <- l:
 				printText(screenSize, "  " + text, CL_LIGHT_RED)
-				c <- Message{0, text}
+				message := Message{1, 0, text}
+				c <- message
 		}
 	}
 }
@@ -87,23 +96,95 @@ func setClCursorPos(line int, offset int) string{
 	return "\033[" + strconv.Itoa(line) + ";" + strconv.Itoa(offset) + "f"
 }
 
+func serverConnection(c chan Message){
+	send := make(chan Message)
+	receive := make(chan Message)
+
+	conn, err := net.Dial(SERVER_CONN_TYPE, SERVER_ADDRESS)
+
+	if err != nil{
+		//handle
+	}
+
+	go serverSendMsg(conn, send)
+	go serverReceiveMsg(conn, receive)
+
+	for{
+		select{
+			case message := <- c:
+				send <- message
+			case message := <- receive:
+				c <- message
+		}
+	}
+}
+
+func serverSendMsg(conn net.Conn, c chan Message){
+	encoder := json.NewEncoder(conn)
+
+	for{
+		msg := <- c
+		encoder.Encode(msg)
+	}
+}
+
+func serverReceiveMsg(conn net.Conn, c chan Message){
+	decoder := json.NewDecoder(conn)
+	var msg Message
+
+	for{
+		err := decoder.Decode(&msg)
+
+		if err != nil{
+			fmt.Println("Connection to server lost")
+			os.Exit(1)
+		} else {
+			c <- msg
+		}
+	}
+}
+
+/*
+func serverConnection(c chan Message){
+	conn, err := net.Dial(SERVER_CONN_TYPE, SERVER_ADDRESS)
+
+	if err != nil{
+		//handle
+	}
+
+	//status, err := bufio.NewReader(conn).ReadString('\n')
+	//...
+
+	encoder = json.NewEncoder(conn)
+
+	encoder.Encode(Message)
+}*/
+
 func main(){
 	
 	fmt.Println(CL_CLEAR)
 
 	clChannel := make(chan Message)
+	serverChannel := make(chan Message)
 
 	go clWorker(clChannel)
+	go serverConnection(serverChannel)
 
-	clChannel <- Message{0, "Testing Go"}
-	clChannel <- Message{0, "  Type '/exit' to close"}
+	clChannel <- Message{0, 0, "Testing Go"}
+	clChannel <- Message{0, 0, "  Type '/exit' to close"}
 
 	for{
-		message := <- clChannel
-
-		if message.text == "/exit"{
-			fmt.Println("Good Bye")
-			os.Exit(0)
+		select{
+			case message := <- clChannel:
+				if message.Text == "/exit"{
+					fmt.Println("Good Bye")
+					os.Exit(0)
+				} else {
+					serverChannel <- message
+				}
+			case message := <- serverChannel:
+				clChannel <- message
 		}
+		
 	}
 }
