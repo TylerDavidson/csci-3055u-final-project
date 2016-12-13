@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"encoding/json"
+	"strconv"
 )
 
 const (
@@ -40,11 +41,12 @@ func main(){
 
 	defer l.Close()
 
-	//clientConns := []clientConn{}
-
 	globalMessageChannel := make(chan Message, 10)
-
 	go sendMessage(globalMessageChannel)
+
+	addClientConn := make(chan clientConn)
+	delClientConn := make(chan int)
+	go manageClientConns(addClientConn, delClientConn, globalMessageChannel)
 
 	//temp id var
 	tempId := 0
@@ -75,15 +77,40 @@ func main(){
 
 				fmt.Println(msg)
 
-				//set up channels
+				//set up client conn channel
 				clientChannel := make(chan Message, 3)
 
-				clientConns = append(clientConns, clientConn{msg.UserId, clientChannel})
+				addClientConn <- clientConn{msg.UserId, clientChannel}
 
-				go handleRequest(conn, msg.UserId, clientChannel, globalMessageChannel)
+				go handleRequest(conn, msg.UserId, clientChannel, globalMessageChannel, delClientConn)
 			}
 		}
 		
+	}
+}
+
+//Go function to handle adding and deleting clientConns from the clientConns array
+func manageClientConns(add chan clientConn, del chan int, sendMessageChannel chan Message){
+	for{
+		select{
+			case cc := <- add:
+				clientConns = append(clientConns, cc)
+				sendMessageChannel <- Message{0, "", 0, " * User " + strconv.Itoa(cc.UserId) + " has joined the chat"}
+			case userId := <- del:
+				deleted := false
+				for i := 0; i < len(clientConns) &&  deleted == false; i++ {
+					if userId == clientConns[i].UserId{
+						if(i == len(clientConns)-1){
+							clientConns = clientConns[:i]
+						} else{
+							clientConns = append(clientConns[:i], clientConns[i+1:]...)
+						}
+						deleted = true
+					}
+				}
+				fmt.Println("User " + strconv.Itoa(userId) + " has disconnect")
+				sendMessageChannel <- Message{0, "", 0, " * User " + strconv.Itoa(userId) + " has left the chat"}
+		}
 	}
 }
 
@@ -94,7 +121,6 @@ func sendMessage(c chan Message){
 	for{
 		msg := <- c
 
-		fmt.Println("Sending message:")
 		fmt.Println(msg)
 
 		for _, cc := range clientConns{
@@ -106,7 +132,7 @@ func sendMessage(c chan Message){
 }
 
 //handles sending and receiving to the clinet
-func handleRequest(conn net.Conn, UserId int, receiveChan chan Message, sendChan chan Message){
+func handleRequest(conn net.Conn, userId int, receiveChan chan Message, sendChan chan Message, delClientConnChannel chan int){
 	
 	//decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
@@ -119,8 +145,7 @@ func handleRequest(conn net.Conn, UserId int, receiveChan chan Message, sendChan
 			case msg := <- connChannel:
 				if msg.Text == "/Disconnect"{
 					fmt.Println("Conn lost")
-					//handle disconnect (potentially will cause problems)
-					//clientConns = append(
+					delClientConnChannel <- userId
 					conn.Close()
 					return
 				} else {
@@ -132,6 +157,7 @@ func handleRequest(conn net.Conn, UserId int, receiveChan chan Message, sendChan
 	}
 }
 
+//Decodes incoming messages from the connection
 func handleConnReceive(conn net.Conn, c chan Message){
 	decoder := json.NewDecoder(conn)
 
