@@ -60,10 +60,12 @@ func clWorker(c chan Message){
 			case text := <- l: // command line listener (outgoing messages)
 				message := Message{userId, userName, 0, text}
 
-				if text[0] != '/'{
-					printMessage(screenSize, message)
+				if len(text) > 0 {
+					if text[0] != '/' {
+						printMessage(screenSize, message)
+					}
+					c <- message
 				}
-				c <- message
 		}
 	}
 }
